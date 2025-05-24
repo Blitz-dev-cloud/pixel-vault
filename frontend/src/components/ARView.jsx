@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
+  MousePointer,
 } from "lucide-react";
 
 const ARView = ({
@@ -20,6 +21,10 @@ const ARView = ({
   const [imageLoadingStates, setImageLoadingStates] = useState({});
   const [selectedNFTIndex, setSelectedNFTIndex] = useState(0);
   const [showNFTSelector, setShowNFTSelector] = useState(false);
+
+  // New state for click-to-place functionality
+  const [placedNFTs, setPlacedNFTs] = useState([]);
+  const [isPlacementMode, setIsPlacementMode] = useState(false);
 
   // Get the currently selected NFT
   const selectedNFT = mockArtPieces[selectedNFTIndex] || mockArtPieces[0];
@@ -74,40 +79,82 @@ const ARView = ({
     }
   }, [mockArtPieces, nftImages]);
 
-  const renderSelectedNFTOnSurface = (surface) => {
-    if (!selectedNFT) return null;
+  // Handle click to place NFT
+  const handleScreenClick = (event) => {
+    if (!isPlacementMode || !selectedNFT) return;
 
-    const imageUrl = nftImages[selectedNFT.tokenId];
-    const loadingState = imageLoadingStates[selectedNFT.tokenId];
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * 100;
+    const y = ((event.clientY - rect.top) / rect.height) * 100;
+
+    // Create a new placed NFT
+    const newPlacedNFT = {
+      id: Date.now() + Math.random(), // Unique ID
+      nft: { ...selectedNFT },
+      x: x,
+      y: y,
+      confidence: 1.0, // High confidence for manually placed items
+    };
+
+    setPlacedNFTs((prev) => [...prev, newPlacedNFT]);
+    setIsPlacementMode(false); // Exit placement mode after placing
+  };
+
+  // Remove a placed NFT
+  const removePlacedNFT = (id) => {
+    setPlacedNFTs((prev) => prev.filter((nft) => nft.id !== id));
+  };
+
+  // Clear all placed NFTs
+  const clearAllNFTs = () => {
+    setPlacedNFTs([]);
+  };
+
+  const renderNFTDisplay = (nft, position, id, isPlaced = false) => {
+    const imageUrl = nftImages[nft.tokenId];
+    const loadingState = imageLoadingStates[nft.tokenId];
 
     // Mobile-responsive sizing
     const isMobile = window.innerWidth <= 768;
-    const baseWidth = isMobile ? 140 : surface.width;
-    const baseHeight = isMobile ? 180 : surface.height;
+    const baseWidth = isMobile ? 140 : 180;
+    const baseHeight = isMobile ? 180 : 220;
 
     return (
       <div
-        key={`${surface.id}-${selectedNFT.tokenId}`}
-        className="absolute border-2 border-green-400 bg-black/40 backdrop-blur-sm rounded-lg transition-all duration-500 overflow-hidden"
+        key={id}
+        className={`absolute border-2 ${
+          isPlaced ? "border-blue-400" : "border-green-400"
+        } bg-black/40 backdrop-blur-sm rounded-lg transition-all duration-500 overflow-hidden group`}
         style={{
-          left: `${surface.x}%`,
-          top: `${surface.y}%`,
+          left: `${position.x}%`,
+          top: `${position.y}%`,
           width: `${Math.min(baseWidth, window.innerWidth * 0.5)}px`,
           height: `${Math.min(baseHeight, window.innerHeight * 0.35)}px`,
           transform: "translate(-50%, -50%)",
-          boxShadow: "0 0 15px rgba(34, 197, 94, 0.4)",
+          boxShadow: `0 0 15px rgba(${
+            isPlaced ? "59, 130, 246" : "34, 197, 94"
+          }, 0.4)`,
           maxWidth: isMobile ? "140px" : "200px",
           maxHeight: isMobile ? "180px" : "240px",
           minWidth: "100px",
           minHeight: "130px",
+          cursor: isPlaced ? "pointer" : "default",
         }}
+        onClick={
+          isPlaced
+            ? (e) => {
+                e.stopPropagation();
+                removePlacedNFT(id);
+              }
+            : undefined
+        }
       >
         {/* NFT Image Display */}
         <div className="w-full h-3/4 relative overflow-hidden rounded-t-lg">
           {imageUrl && loadingState === "loaded" ? (
             <img
               src={imageUrl}
-              alt={selectedNFT.title}
+              alt={nft.title}
               className="w-full h-full object-cover"
               style={{
                 filter: "brightness(0.9) contrast(1.1)",
@@ -121,17 +168,24 @@ const ARView = ({
             <div
               className="w-full h-full flex items-center justify-center text-white font-bold text-xs"
               style={{
-                background: `linear-gradient(135deg, ${selectedNFT.color}, #000000)`,
+                background: `linear-gradient(135deg, ${nft.color}, #000000)`,
               }}
             >
-              #{selectedNFT.tokenId}
+              #{nft.tokenId}
             </div>
           )}
 
           {/* IPFS Indicator */}
-          {selectedNFT.ipfsHash && (
+          {nft.ipfsHash && (
             <div className="absolute top-1 right-1 bg-green-500/80 rounded-full p-1">
               <Wifi className="w-2 h-2 text-white" />
+            </div>
+          )}
+
+          {/* Remove button for placed NFTs */}
+          {isPlaced && (
+            <div className="absolute top-1 left-1 bg-red-500/80 rounded-full p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              <X className="w-2 h-2 text-white" />
             </div>
           )}
         </div>
@@ -140,34 +194,40 @@ const ARView = ({
         <div className="w-full h-1/4 p-1.5 bg-black/60">
           <div className="text-white text-center">
             <div className="font-semibold truncate text-xs leading-tight">
-              {selectedNFT.title.length > 12
-                ? `${selectedNFT.title.slice(0, 12)}...`
-                : selectedNFT.title}
+              {nft.title.length > 12
+                ? `${nft.title.slice(0, 12)}...`
+                : nft.title}
             </div>
             <div className="text-green-300 text-[10px] truncate leading-tight">
-              {selectedNFT.artist.length > 15
-                ? `${selectedNFT.artist.slice(0, 12)}...`
-                : selectedNFT.artist}
+              {nft.artist.length > 15
+                ? `${nft.artist.slice(0, 12)}...`
+                : nft.artist}
             </div>
-            {selectedNFT.ipfsHash && (
+            {nft.ipfsHash && (
               <div className="text-gray-400 text-[8px] font-mono truncate">
-                {selectedNFT.ipfsHash.slice(0, 6)}...
+                {nft.ipfsHash.slice(0, 6)}...
               </div>
             )}
           </div>
         </div>
 
-        {/* Surface Detection Indicator */}
-        <div className="absolute -top-1 -right-1 w-4 h-4 bg-green-400 rounded-full flex items-center justify-center">
+        {/* Status Indicator */}
+        <div
+          className={`absolute -top-1 -right-1 w-4 h-4 ${
+            isPlaced ? "bg-blue-400" : "bg-green-400"
+          } rounded-full flex items-center justify-center`}
+        >
           <div className="w-1.5 h-1.5 bg-white rounded-full animate-ping"></div>
         </div>
 
         {/* Confidence Indicator */}
         <div className="absolute -bottom-0.5 left-1/2 transform -translate-x-1/2">
           <div
-            className="h-0.5 bg-green-400 rounded-full"
+            className={`h-0.5 ${
+              isPlaced ? "bg-blue-400" : "bg-green-400"
+            } rounded-full`}
             style={{
-              width: `${Math.max(20, (surface.confidence || 0.5) * 40)}px`,
+              width: `${Math.max(20, (position.confidence || 0.5) * 40)}px`,
             }}
           ></div>
         </div>
@@ -201,9 +261,17 @@ const ARView = ({
         className="w-full h-full object-cover"
       />
 
+      {/* Clickable overlay for placement */}
+      <div
+        className={`absolute inset-0 z-5 ${
+          isPlacementMode ? "cursor-crosshair bg-blue-500/10" : ""
+        }`}
+        onClick={handleScreenClick}
+      />
+
       {/* Loading State */}
       {!arStream && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black">
+        <div className="absolute inset-0 flex items-center justify-center bg-black z-10">
           <div className="text-center text-white px-4">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-green-400 mx-auto mb-4"></div>
             <p className="text-lg">Initializing AR Camera...</p>
@@ -233,12 +301,34 @@ const ARView = ({
             </span>
           </div>
           <p className="text-xs text-gray-300 leading-tight">
-            {detectedSurfaces.length > 0
-              ? `Surface detected`
-              : arStream
-              ? "Scanning walls..."
-              : "Camera not ready"}
+            Manual placement mode
           </p>
+        </div>
+
+        {/* Placement Controls */}
+        <div className="bg-black/50 backdrop-blur-md text-white p-3 rounded-lg border border-white/20 space-y-2">
+          <button
+            onClick={() => setIsPlacementMode(!isPlacementMode)}
+            className={`w-full px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              isPlacementMode
+                ? "bg-blue-500 hover:bg-blue-600 text-white"
+                : "bg-gray-700/50 hover:bg-gray-600/50 text-gray-300"
+            }`}
+          >
+            <div className="flex items-center justify-center space-x-2">
+              <MousePointer className="w-3 h-3" />
+              <span>{isPlacementMode ? "Cancel" : "Place NFT"}</span>
+            </div>
+          </button>
+
+          {placedNFTs.length > 0 && (
+            <button
+              onClick={clearAllNFTs}
+              className="w-full px-3 py-1.5 bg-red-600/50 hover:bg-red-600/70 text-white rounded-lg text-xs transition-all"
+            >
+              Clear All ({placedNFTs.length})
+            </button>
+          )}
         </div>
       </div>
 
@@ -348,21 +438,37 @@ const ARView = ({
         </div>
       )}
 
-      {/* AR Overlays - Only ONE copy of selected NFT on detected surface */}
-      <div className="absolute inset-0 pointer-events-none">
-        {/* Only render on the FIRST detected surface to avoid duplicates */}
-        {detectedSurfaces.length > 0 &&
-          renderSelectedNFTOnSurface(detectedSurfaces[0])}
+      {/* AR Overlays */}
+      <div className="absolute inset-0 pointer-events-none z-8">
+        {/* Render manually placed NFTs only */}
+        {placedNFTs.map((placedNFT) =>
+          renderNFTDisplay(placedNFT.nft, placedNFT, placedNFT.id, true)
+        )}
 
         {/* Scanning Indicator */}
-        {arStream && detectedSurfaces.length === 0 && (
+        {arStream && placedNFTs.length === 0 && (
           <div className="absolute inset-0 flex items-center justify-center px-4">
-            <div className="w-48 h-48 sm:w-64 sm:h-64 border-2 border-dashed border-green-400 rounded-xl flex items-center justify-center animate-pulse">
+            <div className="w-48 h-48 sm:w-64 sm:h-64 border-2 border-dashed border-blue-400 rounded-xl flex items-center justify-center animate-pulse">
               <div className="text-center text-white">
-                <Camera className="w-8 h-8 sm:w-12 sm:h-12 mx-auto mb-2 sm:mb-4 text-green-400" />
-                <p className="text-sm">Point at walls</p>
-                <p className="text-xs text-gray-300">Detecting surfaces...</p>
+                <MousePointer className="w-8 h-8 sm:w-12 sm:h-12 mx-auto mb-2 sm:mb-4 text-blue-400" />
+                <p className="text-sm">Click "Place NFT" to start</p>
+                <p className="text-xs text-gray-300">Manual placement only</p>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Placement Mode Indicator */}
+        {isPlacementMode && (
+          <div className="absolute inset-0 flex items-center justify-center px-4">
+            <div className="bg-blue-500/20 border-2 border-dashed border-blue-400 rounded-xl p-6 text-center">
+              <MousePointer className="w-12 h-12 mx-auto mb-4 text-blue-400 animate-bounce" />
+              <p className="text-white text-lg font-semibold mb-2">
+                Click to Place NFT
+              </p>
+              <p className="text-blue-300 text-sm">
+                Tap anywhere on the screen
+              </p>
             </div>
           </div>
         )}
@@ -375,21 +481,20 @@ const ARView = ({
             <Smartphone className="w-4 h-4 sm:w-5 sm:h-5 mr-2 text-green-400" />
             NFT AR Gallery
           </h3>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-            <div>
-              <p className="text-gray-300">
-                <strong>Surface:</strong>{" "}
-                {detectedSurfaces.length > 0 ? "✓" : "✗"}
-              </p>
-            </div>
+          <div className="grid grid-cols-3 gap-2 text-xs">
             <div>
               <p className="text-gray-300 truncate">
                 <strong>NFT:</strong> {selectedNFT?.title || "None"}
               </p>
             </div>
-            <div className="col-span-2 sm:col-span-2">
-              <p className="text-gray-300 truncate">
-                <strong>Artist:</strong> {selectedNFT?.artist || "Unknown"}
+            <div>
+              <p className="text-gray-300">
+                <strong>Placed:</strong> {placedNFTs.length}
+              </p>
+            </div>
+            <div>
+              <p className="text-gray-300">
+                <strong>Mode:</strong> Manual
               </p>
             </div>
           </div>
