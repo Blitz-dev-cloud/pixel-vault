@@ -40,7 +40,6 @@ async function main() {
   console.log("\n=== Deployment Successful! ===");
 }
 
-// Error handling 0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9
 main()
   .then(() => process.exit(0))
   .catch((error) => {
