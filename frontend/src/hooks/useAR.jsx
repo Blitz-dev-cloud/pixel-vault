@@ -5,7 +5,7 @@ export const useAR = (arRef, setArStream, setDetectedSurfaces) => {
   const canvasRef = useRef(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Simple edge detection for surface finding
+  // Improved surface detection with better mobile compatibility
   const detectSurfaces = useCallback(
     (videoElement) => {
       if (!canvasRef.current || isProcessing) return;
@@ -14,9 +14,12 @@ export const useAR = (arRef, setArStream, setDetectedSurfaces) => {
       const canvas = canvasRef.current;
       const ctx = canvas.getContext("2d");
 
-      // Set canvas size to match video
-      canvas.width = videoElement.videoWidth;
-      canvas.height = videoElement.videoHeight;
+      // Set canvas size to match video but with reasonable limits for mobile
+      const maxWidth = Math.min(videoElement.videoWidth, 640);
+      const maxHeight = Math.min(videoElement.videoHeight, 480);
+
+      canvas.width = maxWidth;
+      canvas.height = maxHeight;
 
       // Draw current video frame
       ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
@@ -25,18 +28,32 @@ export const useAR = (arRef, setArStream, setDetectedSurfaces) => {
       const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
       const data = imageData.data;
 
-      // Simple edge detection algorithm
+      // Enhanced edge detection algorithm
       const edges = [];
-      const threshold = 50;
+      const threshold = 40; // Slightly lower threshold for better detection
 
-      for (let y = 1; y < canvas.height - 1; y++) {
-        for (let x = 1; x < canvas.width - 1; x++) {
+      for (let y = 2; y < canvas.height - 2; y += 2) {
+        // Skip pixels for performance
+        for (let x = 2; x < canvas.width - 2; x += 2) {
           const idx = (y * canvas.width + x) * 4;
 
-          // Calculate gradient
-          const gx = data[idx + 4] - data[idx - 4]; // horizontal gradient
+          // Calculate gradient using Sobel operator
+          const gx =
+            data[idx + 4] +
+            2 * data[idx + 4] +
+            data[idx + canvas.width * 4 + 4] -
+            (data[idx - 4] +
+              2 * data[idx - 4] +
+              data[idx + canvas.width * 4 - 4]);
+
           const gy =
-            data[idx + canvas.width * 4] - data[idx - canvas.width * 4]; // vertical gradient
+            data[idx - canvas.width * 4] +
+            2 * data[idx - canvas.width * 4] +
+            data[idx - canvas.width * 4 + 4] -
+            (data[idx + canvas.width * 4] +
+              2 * data[idx + canvas.width * 4] +
+              data[idx + canvas.width * 4 + 4]);
+
           const magnitude = Math.sqrt(gx * gx + gy * gy);
 
           if (magnitude > threshold) {
@@ -45,44 +62,55 @@ export const useAR = (arRef, setArStream, setDetectedSurfaces) => {
         }
       }
 
-      // Find rectangular regions (potential walls)
-      const surfaces = findRectangularSurfaces(
-        edges,
-        canvas.width,
-        canvas.height
-      );
+      // Find the best surface (only one)
+      const surface = findBestSurface(edges, canvas.width, canvas.height);
 
-      // Convert to screen coordinates
-      const screenSurfaces = surfaces.map((surface, index) => ({
-        id: Date.now() + index,
-        x: (surface.x / canvas.width) * 100,
-        y: (surface.y / canvas.height) * 100,
-        width: Math.max(
-          120,
-          (surface.width / canvas.width) * window.innerWidth * 0.3
-        ),
-        height: Math.max(
-          160,
-          (surface.height / canvas.height) * window.innerHeight * 0.3
-        ),
-        confidence: surface.confidence,
-      }));
+      if (surface) {
+        // Convert to screen coordinates with mobile-friendly sizing
+        const screenSurface = {
+          id: Date.now(),
+          x: (surface.x / canvas.width) * 100,
+          y: (surface.y / canvas.height) * 100,
+          width: Math.min(
+            window.innerWidth * 0.6, // Maximum 60% of screen width
+            Math.max(
+              120, // Minimum width
+              (surface.width / canvas.width) * window.innerWidth * 0.4
+            )
+          ),
+          height: Math.min(
+            window.innerHeight * 0.4, // Maximum 40% of screen height
+            Math.max(
+              160, // Minimum height
+              (surface.height / canvas.height) * window.innerHeight * 0.3
+            )
+          ),
+          confidence: surface.confidence,
+        };
 
-      setDetectedSurfaces(screenSurfaces);
+        setDetectedSurfaces([screenSurface]); // Only one surface
+      } else {
+        setDetectedSurfaces([]);
+      }
+
       setIsProcessing(false);
     },
     [isProcessing, setDetectedSurfaces]
   );
 
-  // Find rectangular surfaces from edge points
-  const findRectangularSurfaces = (edges, width, height) => {
-    const surfaces = [];
-    const minSurfaceSize = 80;
-    const gridSize = 40;
+  // Find the single best rectangular surface
+  const findBestSurface = (edges, width, height) => {
+    if (edges.length < 10) return null;
 
-    // Divide image into grid and analyze each section
-    for (let y = 0; y < height - gridSize; y += gridSize) {
-      for (let x = 0; x < width - gridSize; x += gridSize) {
+    const surfaces = [];
+    const minSurfaceSize = Math.min(width, height) * 0.15; // 15% of smaller dimension
+    const gridSize = Math.min(width, height) * 0.2; // 20% of smaller dimension
+
+    // Divide image into fewer, larger grid sections
+    const stepSize = Math.floor(gridSize * 0.7);
+
+    for (let y = 0; y < height - gridSize; y += stepSize) {
+      for (let x = 0; x < width - gridSize; x += stepSize) {
         const sectionEdges = edges.filter(
           (edge) =>
             edge.x >= x &&
@@ -91,37 +119,61 @@ export const useAR = (arRef, setArStream, setDetectedSurfaces) => {
             edge.y < y + gridSize
         );
 
-        // If section has moderate edge density, it might be a good surface
-        if (sectionEdges.length > 5 && sectionEdges.length < 50) {
-          // Check for rectangular patterns
-          const horizontalEdges = sectionEdges.filter(
-            (edge) =>
-              Math.abs(edge.x - x) < 10 ||
-              Math.abs(edge.x - (x + gridSize)) < 10
+        // Look for sections with good edge density (not too sparse, not too dense)
+        if (sectionEdges.length > 8 && sectionEdges.length < 40) {
+          // Check for rectangular patterns more strictly
+          const leftEdges = sectionEdges.filter(
+            (edge) => Math.abs(edge.x - x) < 15
           );
-          const verticalEdges = sectionEdges.filter(
-            (edge) =>
-              Math.abs(edge.y - y) < 10 ||
-              Math.abs(edge.y - (y + gridSize)) < 10
+          const rightEdges = sectionEdges.filter(
+            (edge) => Math.abs(edge.x - (x + gridSize)) < 15
+          );
+          const topEdges = sectionEdges.filter(
+            (edge) => Math.abs(edge.y - y) < 15
+          );
+          const bottomEdges = sectionEdges.filter(
+            (edge) => Math.abs(edge.y - (y + gridSize)) < 15
           );
 
-          if (horizontalEdges.length > 2 && verticalEdges.length > 2) {
+          const hasVerticalEdges =
+            leftEdges.length > 2 || rightEdges.length > 2;
+          const hasHorizontalEdges =
+            topEdges.length > 2 || bottomEdges.length > 2;
+
+          if (hasVerticalEdges && hasHorizontalEdges) {
+            const avgStrength =
+              sectionEdges.reduce((sum, edge) => sum + edge.strength, 0) /
+              sectionEdges.length;
+
             surfaces.push({
-              x: x + gridSize / 4,
-              y: y + gridSize / 4,
-              width: gridSize * 1.5,
-              height: gridSize * 2,
-              confidence: Math.min(
-                0.9,
-                (horizontalEdges.length + verticalEdges.length) / 20
-              ),
+              x: x + gridSize / 2,
+              y: y + gridSize / 2,
+              width: gridSize * 1.2,
+              height: gridSize * 1.5,
+              confidence: Math.min(0.95, avgStrength / 100),
+              edgeCount: sectionEdges.length,
+              rectangularity:
+                (leftEdges.length +
+                  rightEdges.length +
+                  topEdges.length +
+                  bottomEdges.length) /
+                4,
             });
           }
         }
       }
     }
 
-    return surfaces.slice(0, 4); // Limit to 4 surfaces
+    if (surfaces.length === 0) return null;
+
+    // Sort by confidence and rectangularity, return the best one
+    surfaces.sort((a, b) => {
+      const scoreA = a.confidence * 0.6 + (a.rectangularity / 10) * 0.4;
+      const scoreB = b.confidence * 0.6 + (b.rectangularity / 10) * 0.4;
+      return scoreB - scoreA;
+    });
+
+    return surfaces[0];
   };
 
   const initAR = useCallback(async () => {
@@ -138,12 +190,13 @@ export const useAR = (arRef, setArStream, setDetectedSurfaces) => {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
 
+      // Mobile-optimized constraints
       const constraints = {
         video: {
           facingMode: { ideal: "environment" },
-          width: { ideal: 1280, max: 1920, min: 640 },
-          height: { ideal: 720, max: 1080, min: 480 },
-          frameRate: { ideal: 30, max: 60, min: 15 },
+          width: { ideal: 1280, max: 1920, min: 480 },
+          height: { ideal: 720, max: 1080, min: 360 },
+          frameRate: { ideal: 24, max: 30, min: 15 }, // Lower frame rate for better performance
         },
         audio: false,
       };
@@ -166,7 +219,7 @@ export const useAR = (arRef, setArStream, setDetectedSurfaces) => {
           // Start surface detection after video is playing
           setTimeout(() => {
             startSurfaceDetection();
-          }, 1000);
+          }, 1500); // Slightly longer delay for mobile
         };
       }
     } catch (err) {
@@ -201,8 +254,8 @@ export const useAR = (arRef, setArStream, setDetectedSurfaces) => {
       }
     };
 
-    // Process every 2 seconds to avoid performance issues
-    const intervalId = setInterval(processFrame, 2000);
+    // Process every 3 seconds to avoid performance issues on mobile
+    const intervalId = setInterval(processFrame, 3000);
 
     // Store interval ID for cleanup
     arRef.current.surfaceDetectionInterval = intervalId;
@@ -226,7 +279,7 @@ export const useAR = (arRef, setArStream, setDetectedSurfaces) => {
       arRef.current.srcObject = null;
     }
 
-    if (canvasRef.current) {
+    if (canvasRef.current && document.body.contains(canvasRef.current)) {
       document.body.removeChild(canvasRef.current);
       canvasRef.current = null;
     }
